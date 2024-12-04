@@ -12,54 +12,102 @@ provider "docker" {
   #host = "unix:///var/run/docker.sock" # Docker on ubuntu connection
 }
 
-# Creating a Docker Image ubuntu with the latest as the Tag.
-resource "docker_image" "ubuntu" {
-  name = "ubuntu:latest"
+# PostgreSQL Database
+resource "docker_image" "postgres" {
+  name = "postgres:15"
 }
 
-# Creating a Docker Container using the latest ubuntu image.
-resource "docker_container" "webserver" {
-  image             = docker_image.ubuntu.image_id
-  name              = "terraform-docker-test"
-  must_run          = true
-  publish_all_ports = true
-  command = [
-    "tail",
-    "-f",
-    "/dev/null"
+resource "docker_container" "database" {
+  name  = "lingo-db"
+  image = docker_image.postgres.image_id
+  
+  env = [
+    "POSTGRES_USER=lingoapp",
+    "POSTGRES_PASSWORD=password123",
+    "POSTGRES_DB=lingodb"
   ]
-}
-
-resource "docker_image" "nginx" {
-  name         = "nginx:latest"
-  keep_locally = false
-}
-
-resource "docker_container" "nginx" {
-  image = docker_image.nginx.image_id
-  name  = "nginx-test"
+  
   ports {
-    internal = 80
-    external = 8000
+    internal = 5432
+    external = 5432
+  }
+  
+  volumes {
+    container_path = "/var/lib/postgresql/data"
+    volume_name    = docker_volume.db_data.name
+  }
+  
+  networks_advanced {
+    name = docker_network.lingo_network.name
   }
 }
 
-resource "docker_network" "private_network" {
-  name = "my_network"
+# Backend Node.js
+resource "docker_image" "node" {
+  name = "node:18-alpine"
 }
 
-# node should be a swarm manager. Use "docker swarm init" or "docker swarm join" to connect
-#resource "docker_secret" "foo" {
-#  name = "foo"
-#  data = base64encode("{\"foo\": \"s3cr3t\"}")
-#}
-
-resource "docker_volume" "shared_volume" {
-  name = "shared_volume"
+resource "docker_container" "backend" {
+  name  = "lingo-backend"
+  image = docker_image.node.image_id
+  
+  ports {
+    internal = 4000
+    external = 4000
+  }
+  
+  volumes {
+    container_path = "/app"
+    host_path      = "${path.cwd}/backend"
+  }
+  
+  working_dir = "/app"
+  
+  command = [
+    "npm",
+    "run",
+    "dev"
+  ]
+  
+  networks_advanced {
+    name = docker_network.lingo_network.name
+  }
 }
 
-#The source image must exist on the machine running the docker daemon.
-#resource "docker_tag" "tag" {
-#  source_image = "xxxx"
-#  target_image = "xxxx"
-#}
+# Frontend React
+resource "docker_container" "frontend" {
+  name  = "lingo-frontend"
+  image = docker_image.node.image_id
+  
+  ports {
+    internal = 3000
+    external = 3000
+  }
+  
+  volumes {
+    container_path = "/app"
+    host_path      = "${path.cwd}/frontend"
+  }
+  
+  working_dir = "/app"
+  
+  command = [
+    "npm",
+    "start"
+  ]
+  
+  networks_advanced {
+    name = docker_network.lingo_network.name
+  }
+}
+
+# Persistent volume for database
+resource "docker_volume" "db_data" {
+  name = "lingo_db_data"
+}
+
+# Network for container communication
+resource "docker_network" "lingo_network" {
+  name = "lingo_network"
+  driver = "bridge"
+}
